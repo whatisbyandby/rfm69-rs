@@ -1,0 +1,13 @@
+[package]
+name = "rfm69-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+defmt = "0.3"
+embedded-hal = "1.0.0"
+
+
+[dev-dependencies]
+embedded-hal-mock = "0.11.1"
+mockall = "0.13.1"
