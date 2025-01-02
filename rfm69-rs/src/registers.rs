@@ -4,7 +4,7 @@
 #[derive(Copy, Clone)]
 pub enum Register {
     Fifo = 0x00, // FIFO register: used for read/write access to the FIFO buffer.
-    RegOpMode = 0x01, // Operating modes of the transceiver.
+    OpMode = 0x01, // Operating modes of the transceiver.
     DataModul = 0x02, // Data operation mode and modulation settings.
     BitrateMsb = 0x03, // Bitrate most significant byte.
     BitrateLsb = 0x04, // Bitrate least significant byte.

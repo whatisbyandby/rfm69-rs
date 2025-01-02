@@ -226,3 +226,12 @@ impl ModemConfigChoice {
 }
 
 }
+
+pub const RF_PALEVEL_PA0_ON: u8 = 0x80;
+pub const RF_PALEVEL_PA1_ON: u8 = 0x40;
+pub const RF_PALEVEL_PA2_ON: u8 = 0x20;
+
+pub const RF_PALEVEL_OUTPUTPOWER_11111: u8 = 0x1f;
+
+pub const RF_DIOMAPPING1_DIO0_00: u8 = 0x00;
+pub const RF_DIOMAPPING1_DIO0_01: u8 = 0x40;

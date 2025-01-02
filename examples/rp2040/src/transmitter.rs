@@ -14,7 +14,6 @@ use {defmt_rtt as _, panic_probe as _};
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 
 use rfm69_rs::rfm69::Rfm69;
-use rfm69_rs::registers::Register;
 use embassy_sync::blocking_mutex::{raw::NoopRawMutex, Mutex};
 
 

@@ -1,12 +1,16 @@
 use crate::read_write::ReadWrite;
 use crate::registers::Register;
-use crate::settings::{ContinuousDagc, ModemConfigChoice, SyncConfiguration, RF69_FSTEP, RF69_FXOSC};
+use crate::settings::{
+    ContinuousDagc, ModemConfigChoice, SyncConfiguration, RF69_FSTEP, RF69_FXOSC, RF_DIOMAPPING1_DIO0_00, RF_DIOMAPPING1_DIO0_01, RF_PALEVEL_OUTPUTPOWER_11111, RF_PALEVEL_PA0_ON, RF_PALEVEL_PA1_ON, RF_PALEVEL_PA2_ON
+};
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
 
 pub struct Rfm69<SPI, RESET, D> {
     pub spi: SPI,
     pub reset_pin: RESET,
     pub delay: D,
+    tx_power: i8,
+    current_mode: Rfm69Mode,
 }
 
 #[derive(Debug, PartialEq)]
@@ -14,6 +18,15 @@ pub enum Rfm69Error {
     ResetError,
     SpiWriteError,
     SpiReadError,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Rfm69Mode {
+    Sleep = 0x00,
+    Standby = 0x04,
+    Fs = 0x08,
+    Tx = 0x0C,
+    Rx = 0x10,
 }
 
 impl<SPI, RESET, D> Rfm69<SPI, RESET, D>
@@ -39,6 +52,8 @@ where
             spi,
             reset_pin,
             delay,
+            tx_power: 13,
+            current_mode: Rfm69Mode::Standby,
         }
     }
 
@@ -60,6 +75,10 @@ where
             &sync_word,
         )?;
 
+        // If high power boost set previously, disable it
+        self.write_register(Register::TestPa1, 0x55)?;
+        self.write_register(Register::TestPa2, 0x70)?;
+
         self.set_modem_config(ModemConfigChoice::GfskRb250Fd250)?;
 
         self.set_preamble_length(4)?;
@@ -71,11 +90,10 @@ where
 
     pub fn read_all_registers(&mut self) -> Result<[(u8, u8); 84], Rfm69Error> {
         let mut registers = [0u8; 79];
-        self.read_many(Register::RegOpMode, &mut registers)?;
-
+        self.read_many(Register::OpMode, &mut registers)?;
 
         let mut mapped: [(u8, u8); 84] = [(0, 0); 84]; // Initialize the mapped array
-    
+
         for (index, &value) in registers.iter().enumerate() {
             mapped[index] = ((index + 1).try_into().unwrap(), value);
         }
@@ -85,7 +103,7 @@ where
         mapped[81] = (0x5C, self.read_register(Register::TestPa2)?);
         mapped[82] = (0x6F, self.read_register(Register::TestDagc)?);
         mapped[83] = (0x71, self.read_register(Register::TestAfc)?);
-        
+
         Ok(mapped)
     }
 
@@ -138,8 +156,6 @@ where
     fn set_modem_config(&mut self, config: ModemConfigChoice) -> Result<(), Rfm69Error> {
         let values = config.values();
 
-        // write the first 5 bytes in the values array
-
         self.write_many(Register::DataModul, &values[0..5])?;
         self.write_many(Register::RxBw, &values[5..7])?;
         self.write_register(Register::PacketConfig1, values[7])?;
@@ -160,7 +176,6 @@ where
     }
 
     fn set_frequency(&mut self, freq_mhz: u32) -> Result<(), Rfm69Error> {
-
         let mut frf = (freq_mhz * RF69_FSTEP) as u32;
         frf /= RF69_FXOSC as u32;
 
@@ -168,9 +183,87 @@ where
         let msb = ((frf >> 16) & 0xFF) as u8;
         let mid = ((frf >> 8) & 0xFF) as u8;
         let lsb = (frf & 0xFF) as u8;
-        
+
         let buffer = [msb, mid, lsb];
         self.write_many(Register::FrfMsb, &buffer)?;
+        Ok(())
+    }
+
+    fn set_tx_power(&mut self, tx_power: i8, is_high_power: bool) -> Result<(), Rfm69Error> {
+        let pa_level;
+
+        if is_high_power {
+            let clamped_power = tx_power.clamp(-2, 20);
+
+            if clamped_power <= 13 {
+                // -2dBm to +13dBm
+                // Need PA1 exclusivelly on RFM69HW
+                pa_level =
+                    RF_PALEVEL_PA1_ON | ((tx_power + 18) as u8 & RF_PALEVEL_OUTPUTPOWER_11111);
+            } else if clamped_power >= 18 {
+                // +18dBm to +20dBm
+                // Need PA1+PA2
+                // Also need PA boost settings change when tx is turned on and off, see setModeTx()
+                pa_level = RF_PALEVEL_PA1_ON
+                    | RF_PALEVEL_PA2_ON
+                    | ((tx_power + 11) as u8 & RF_PALEVEL_OUTPUTPOWER_11111);
+            } else {
+                // +14dBm to +17dBm
+                // Need PA1+PA2
+                pa_level = RF_PALEVEL_PA1_ON
+                    | RF_PALEVEL_PA2_ON
+                    | ((tx_power + 14) as u8 & RF_PALEVEL_OUTPUTPOWER_11111);
+            }
+        } else {
+            let clamped_power = tx_power.clamp(-18, 13);
+            pa_level =
+                RF_PALEVEL_PA0_ON | ((clamped_power + 18) as u8 & RF_PALEVEL_OUTPUTPOWER_11111);
+        }
+
+        self.write_register(Register::PaLevel, pa_level)?;
+        self.tx_power = tx_power;
+        Ok(())
+    }
+
+    fn set_mode(&mut self, mode: Rfm69Mode) -> Result<(), Rfm69Error> {
+        if self.current_mode == mode {
+            return Ok(());
+        }
+
+        match mode {
+            Rfm69Mode::Rx => {
+                // If high power boost, return power amp to receive mode
+                if self.tx_power >= 18 {
+                    self.write_register(Register::TestPa1, 0x55)?;
+                    self.write_register(Register::TestPa2, 0x70)?;
+                }
+                // set DIOMAPPING1 to 0x01
+                self.write_register(Register::DioMapping1, RF_DIOMAPPING1_DIO0_01)?;
+            }
+
+            Rfm69Mode::Tx => {
+                // If high power boost, enable power amp
+                if self.tx_power >= 18 {
+                    self.write_register(Register::TestPa1, 0x5D)?;
+                    self.write_register(Register::TestPa2, 0x7C)?;
+                }
+
+                self.write_register(Register::DioMapping1, RF_DIOMAPPING1_DIO0_00)?;
+            }
+
+            _ => {}
+        }
+
+        // Read the current mode
+        let mut current_mode = self.read_register(Register::OpMode)?;
+        current_mode &= !0x1C;
+        current_mode |= mode as u8 & 0x1C;
+
+        // // Set the new mode
+        self.write_register(Register::OpMode, current_mode)?;
+        while (self.read_register(Register::IrqFlags1)? & 0x80) == 0x00 {
+            self.delay.delay_ms(10);
+        }
         Ok(())
     }
 
@@ -209,6 +302,7 @@ mod tests {
 
     use super::*;
 
+    use embedded_hal::delay;
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::digital::{
         Mock as DigitalMock, State, Transaction as GpioTransaction,
@@ -501,6 +595,129 @@ mod tests {
         rfm.spi.update_expectations(&spi_expectations);
 
         rfm.set_frequency(915).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_tx_power() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::PaLevel.write()),
+            SpiTransaction::write(0x50),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_tx_power(-2, true).unwrap();
+        assert_eq!(rfm.tx_power, -2);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_mode_rx() {
+        let mut rfm = setup_rfm();
+        rfm.tx_power = 18;
+
+        let spi_expectations = [
+            // If high power boost, return power amp to receive mode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa1.write()),
+            SpiTransaction::write(0x55),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa2.write()),
+            SpiTransaction::write(0x70),
+            SpiTransaction::transaction_end(),
+            // set DIOMAPPING1 to 0x01
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::DioMapping1.write()),
+            SpiTransaction::write(RF_DIOMAPPING1_DIO0_01),
+            SpiTransaction::transaction_end(),
+            // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
+            SpiTransaction::transaction_end(),
+            // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xD0),
+            SpiTransaction::transaction_end(),
+            // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
+
+        rfm.spi.update_expectations(&spi_expectations);
+        rfm.delay.update_expectations(&delay_expectations);
+
+        rfm.set_mode(Rfm69Mode::Rx).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_mode_tx() {
+        let mut rfm = setup_rfm();
+        rfm.tx_power = 18;
+
+        let spi_expectations = [
+            // If high power boost, return power amp to receive mode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa1.write()),
+            SpiTransaction::write(0x5D),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa2.write()),
+            SpiTransaction::write(0x7C),
+            SpiTransaction::transaction_end(),
+            // set DIOMAPPING1 to 0x00
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::DioMapping1.write()),
+            SpiTransaction::write(RF_DIOMAPPING1_DIO0_00),
+            SpiTransaction::transaction_end(),
+            // // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
+            SpiTransaction::transaction_end(),
+            // // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xCC),
+            SpiTransaction::transaction_end(),
+            // // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        let delay_expectations = [
+            DelayTransaction::blocking_delay_ms(10)
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+        rfm.delay.update_expectations(&delay_expectations);
+
+        rfm.set_mode(Rfm69Mode::Tx).unwrap();
 
         check_expectations(&mut rfm);
     }
