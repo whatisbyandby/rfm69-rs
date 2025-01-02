@@ -24,7 +24,6 @@ type Spi0Bus = Mutex<NoopRawMutex, RefCell<Spi<'static, SPI0, spi::Blocking>>>;
 async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let reset_pin = Output::new(p.PIN_20, Level::Low);
-    let intr_pin = Output::new(p.PIN_21, Level::Low);
     let delay = Delay;
 
     let miso = p.PIN_16;
@@ -52,9 +51,14 @@ async fn main(_spawner: Spawner) {
 
 
     
-    let mut rfm69 = Rfm69::new(spi_device, reset_pin, delay, intr_pin);
+    let mut rfm69 = Rfm69::new(spi_device, reset_pin, delay);
 
     rfm69.init().unwrap();
+
+    let registers = rfm69.read_all_registers().unwrap();
+    registers.iter().for_each(|register| {
+        info!("Register: 0x{:02X}, Value: 0x{:02X}", register.0, register.1);
+    });
 
     let temperature = rfm69.read_temperature().unwrap();
     info!("Temperature: {}", temperature);

@@ -1,6 +1,6 @@
 use crate::read_write::ReadWrite;
 use crate::registers::Register;
-use crate::settings::{ContinuousDagc, ModemConfigChoice, SyncConfiguration};
+use crate::settings::{ContinuousDagc, ModemConfigChoice, SyncConfiguration, RF69_FSTEP, RF69_FXOSC};
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
 
 pub struct Rfm69<SPI, RESET, D> {
@@ -45,6 +45,13 @@ where
     pub fn init(&mut self) -> Result<(), Rfm69Error> {
         self.reset()?;
 
+        let version = self.read_register(Register::Version)?;
+
+        // the RFM69 module should return 0x24
+        if version != 0x24 {
+            return Err(Rfm69Error::SpiReadError);
+        }
+
         self.set_default_fifo_threshold()?;
         self.set_dagc(ContinuousDagc::ImprovedLowBeta1)?;
         let sync_word = [0x2D, 0xD4];
@@ -53,7 +60,37 @@ where
             &sync_word,
         )?;
 
+        self.set_modem_config(ModemConfigChoice::GfskRb250Fd250)?;
+
+        self.set_preamble_length(4)?;
+
+        self.set_frequency(915)?;
+
         Ok(())
+    }
+
+    pub fn read_all_registers(&mut self) -> Result<[(u8, u8); 84], Rfm69Error> {
+        let mut registers = [0u8; 79];
+        self.read_many(Register::RegOpMode, &mut registers)?;
+
+
+        let mut mapped: [(u8, u8); 84] = [(0, 0); 84]; // Initialize the mapped array
+    
+        for (index, &value) in registers.iter().enumerate() {
+            mapped[index] = ((index + 1).try_into().unwrap(), value);
+        }
+
+        mapped[79] = (0x58, self.read_register(Register::TestLna)?);
+        mapped[80] = (0x5A, self.read_register(Register::TestPa1)?);
+        mapped[81] = (0x5C, self.read_register(Register::TestPa2)?);
+        mapped[82] = (0x6F, self.read_register(Register::TestDagc)?);
+        mapped[83] = (0x71, self.read_register(Register::TestAfc)?);
+        
+        Ok(mapped)
+    }
+
+    pub fn read_revision(&mut self) -> Result<u8, Rfm69Error> {
+        self.read_register(Register::Version)
     }
 
     pub fn read_temperature(&mut self) -> Result<f32, Rfm69Error> {
@@ -107,6 +144,33 @@ where
         self.write_many(Register::RxBw, &values[5..7])?;
         self.write_register(Register::PacketConfig1, values[7])?;
 
+        Ok(())
+    }
+
+    fn set_preamble_length(&mut self, preamble_length: u16) -> Result<(), Rfm69Error> {
+        // split the preamble length into two bytes
+        let msb = (preamble_length >> 8) as u8;
+        let lsb = preamble_length as u8;
+
+        // write the two bytes to the RFM69
+        let buffer = [msb, lsb];
+
+        self.write_many(Register::PreambleMsb, &buffer)?;
+        Ok(())
+    }
+
+    fn set_frequency(&mut self, freq_mhz: u32) -> Result<(), Rfm69Error> {
+
+        let mut frf = (freq_mhz * RF69_FSTEP) as u32;
+        frf /= RF69_FXOSC as u32;
+
+        // split the frequency into three bytes
+        let msb = ((frf >> 16) & 0xFF) as u8;
+        let mid = ((frf >> 8) & 0xFF) as u8;
+        let lsb = (frf & 0xFF) as u8;
+        
+        let buffer = [msb, mid, lsb];
+        self.write_many(Register::FrfMsb, &buffer)?;
         Ok(())
     }
 
@@ -382,6 +446,61 @@ mod tests {
         rfm.spi.update_expectations(&spi_expectations);
 
         rfm.set_modem_config(ModemConfigChoice::FskRb2Fd5).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_preamble_length() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::PreambleMsb.write()),
+            SpiTransaction::write_vec(vec![0x00, 0xFF]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_preamble_length(255).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_get_revision() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Version.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x24]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        let revision = rfm.read_revision().unwrap();
+        assert_eq!(revision, 0x24);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_frequency() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::FrfMsb.write()),
+            SpiTransaction::write_vec(vec![0xE4, 0xC0, 0x00]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_frequency(915).unwrap();
 
         check_expectations(&mut rfm);
     }

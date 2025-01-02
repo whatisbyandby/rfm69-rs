@@ -87,6 +87,7 @@ pub enum Register {
     TestPa1 = 0x5A, // Test PA1 control.
     TestPa2 = 0x5C, // Test PA2 control.
     TestDagc = 0x6F, // Test DAGC settings.
+    TestAfc = 0x71, // Test AFC settings.
 }
 
 
