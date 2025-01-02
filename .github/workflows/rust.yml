@@ -15,5 +15,4 @@ jobs:
       
     - uses: actions/checkout@v4
     - name: Build & Test
-      working-directory: ./rfm69
-      run: cargo build --verbose && cargo test --verbose
+      run: cd rfm69-rs && cargo build --verbose && cargo test --verbose
