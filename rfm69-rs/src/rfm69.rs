@@ -18,6 +18,7 @@ pub enum Rfm69Error {
     ResetError,
     SpiWriteError,
     SpiReadError,
+    ConfigurationError,
 }
 
 #[derive(Debug, PartialEq)]
@@ -98,11 +99,11 @@ where
             mapped[index] = ((index + 1).try_into().unwrap(), value);
         }
 
-        mapped[79] = (0x58, self.read_register(Register::TestLna)?);
-        mapped[80] = (0x5A, self.read_register(Register::TestPa1)?);
-        mapped[81] = (0x5C, self.read_register(Register::TestPa2)?);
-        mapped[82] = (0x6F, self.read_register(Register::TestDagc)?);
-        mapped[83] = (0x71, self.read_register(Register::TestAfc)?);
+        mapped[79] = (Register::TestLna.addr(), self.read_register(Register::TestLna)?);
+        mapped[80] = (Register::TestPa1.addr(), self.read_register(Register::TestPa1)?);
+        mapped[81] = (Register::TestPa2.addr(), self.read_register(Register::TestPa2)?);
+        mapped[82] = (Register::TestDagc.addr(), self.read_register(Register::TestDagc)?);
+        mapped[83] = (Register::TestAfc.addr(), self.read_register(Register::TestAfc)?);
 
         Ok(mapped)
     }
@@ -137,7 +138,7 @@ where
         sync_words: &[u8],
     ) -> Result<(), Rfm69Error> {
         if sync_words.len() > 8 || sync_words.len() == 0 {
-            return Err(Rfm69Error::SpiWriteError);
+            return Err(Rfm69Error::ConfigurationError);
         }
 
         let mut buffer = [0u8; 9]; // 1 byte for config + up to 8 bytes for sync words
@@ -189,7 +190,7 @@ where
         Ok(())
     }
 
-    fn set_tx_power(&mut self, tx_power: i8, is_high_power: bool) -> Result<(), Rfm69Error> {
+    pub fn set_tx_power(&mut self, tx_power: i8, is_high_power: bool) -> Result<(), Rfm69Error> {
         let pa_level;
 
         if is_high_power {
@@ -225,7 +226,7 @@ where
         Ok(())
     }
 
-    fn set_mode(&mut self, mode: Rfm69Mode) -> Result<(), Rfm69Error> {
+    pub fn set_mode(&mut self, mode: Rfm69Mode) -> Result<(), Rfm69Error> {
         if self.current_mode == mode {
             return Ok(());
         }
@@ -301,8 +302,6 @@ mod tests {
     use crate::settings::{ContinuousDagc, SyncConfiguration};
 
     use super::*;
-
-    use embedded_hal::delay;
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::digital::{
         Mock as DigitalMock, State, Transaction as GpioTransaction,
@@ -329,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rfm69_reset() {
+    fn test_reset() {
         let mut rfm = setup_rfm();
 
         let reset_expectations = [
@@ -350,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rfm69_read_temperature() {
+    fn test_read_temperature() {
         let mut rfm = setup_rfm();
 
         let temperature_expectations = [
@@ -492,7 +491,7 @@ mod tests {
                 SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
                 &sync_words
             ),
-            Err(Rfm69Error::SpiWriteError)
+            Err(Rfm69Error::ConfigurationError)
         );
 
         check_expectations(&mut rfm);
@@ -512,7 +511,7 @@ mod tests {
                 SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
                 &sync_words
             ),
-            Err(Rfm69Error::SpiWriteError)
+            Err(Rfm69Error::ConfigurationError)
         );
 
         check_expectations(&mut rfm);

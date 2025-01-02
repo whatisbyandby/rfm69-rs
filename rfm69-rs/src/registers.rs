@@ -105,4 +105,9 @@ impl Register {
     pub fn write(self) -> u8 {
         (self as u8) | WRITE_MASK
     }
+
+    #[inline]
+    pub fn addr(self) -> u8 {
+        self as u8
+    }
 }

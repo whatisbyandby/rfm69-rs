@@ -1,4 +1,4 @@
-name: Rust
+name: Rfm69-rs-lib
 
 on:
   push:
@@ -9,12 +9,13 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
     - name: Build
+      working-directory: ./rfm69
       run: cargo build --verbose
     - name: Run tests
+      working-directory: ./rfm69
       run: cargo test --verbose
