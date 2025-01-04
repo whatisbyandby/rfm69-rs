@@ -1,8 +1,11 @@
 use crate::read_write::ReadWrite;
 use crate::registers::Register;
 use crate::settings::{
-    ContinuousDagc, ModemConfigChoice, SyncConfiguration, RF69_FSTEP, RF69_FXOSC, RF_DIOMAPPING1_DIO0_00, RF_DIOMAPPING1_DIO0_01, RF_PALEVEL_OUTPUTPOWER_11111, RF_PALEVEL_PA0_ON, RF_PALEVEL_PA1_ON, RF_PALEVEL_PA2_ON
+    ContinuousDagc, ModemConfigChoice, SyncConfiguration, RF69_FSTEP, RF69_FXOSC,
+    RF_DIOMAPPING1_DIO0_00, RF_DIOMAPPING1_DIO0_01, RF_PALEVEL_OUTPUTPOWER_11111,
+    RF_PALEVEL_PA0_ON, RF_PALEVEL_PA1_ON, RF_PALEVEL_PA2_ON,
 };
+use defmt::{debug, info};
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
 
 pub struct Rfm69<SPI, RESET, D> {
@@ -10,6 +13,7 @@ pub struct Rfm69<SPI, RESET, D> {
     pub reset_pin: RESET,
     pub delay: D,
     tx_power: i8,
+    is_high_power: bool,
     current_mode: Rfm69Mode,
 }
 
@@ -19,15 +23,27 @@ pub enum Rfm69Error {
     SpiWriteError,
     SpiReadError,
     ConfigurationError,
+    MessageTooLarge,
+    InvalidMode,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Rfm69Mode {
     Sleep = 0x00,
     Standby = 0x04,
     Fs = 0x08,
     Tx = 0x0C,
     Rx = 0x10,
+}
+
+pub struct Rfm69Config {
+    pub sync_configuration: SyncConfiguration,
+    pub sync_words: [u8; 8],
+    pub modem_config: ModemConfigChoice,
+    pub preamble_length: u16,
+    pub frequency: u32,
+    pub tx_power: i8,
+    pub is_high_power: bool,
 }
 
 impl<SPI, RESET, D> Rfm69<SPI, RESET, D>
@@ -54,6 +70,7 @@ where
             reset_pin,
             delay,
             tx_power: 13,
+            is_high_power: true,
             current_mode: Rfm69Mode::Standby,
         }
     }
@@ -70,6 +87,8 @@ where
 
         self.set_default_fifo_threshold()?;
         self.set_dagc(ContinuousDagc::ImprovedLowBeta1)?;
+
+        self.write_register(Register::Lna, 0x88)?;
         let sync_word = [0x2D, 0xD4];
         self.set_sync_words(
             SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
@@ -83,6 +102,8 @@ where
         self.set_modem_config(ModemConfigChoice::GfskRb250Fd250)?;
 
         self.set_preamble_length(4)?;
+
+        self.set_tx_power(13)?;
 
         self.set_frequency(915)?;
 
@@ -99,11 +120,26 @@ where
             mapped[index] = ((index + 1).try_into().unwrap(), value);
         }
 
-        mapped[79] = (Register::TestLna.addr(), self.read_register(Register::TestLna)?);
-        mapped[80] = (Register::TestPa1.addr(), self.read_register(Register::TestPa1)?);
-        mapped[81] = (Register::TestPa2.addr(), self.read_register(Register::TestPa2)?);
-        mapped[82] = (Register::TestDagc.addr(), self.read_register(Register::TestDagc)?);
-        mapped[83] = (Register::TestAfc.addr(), self.read_register(Register::TestAfc)?);
+        mapped[79] = (
+            Register::TestLna.addr(),
+            self.read_register(Register::TestLna)?,
+        );
+        mapped[80] = (
+            Register::TestPa1.addr(),
+            self.read_register(Register::TestPa1)?,
+        );
+        mapped[81] = (
+            Register::TestPa2.addr(),
+            self.read_register(Register::TestPa2)?,
+        );
+        mapped[82] = (
+            Register::TestDagc.addr(),
+            self.read_register(Register::TestDagc)?,
+        );
+        mapped[83] = (
+            Register::TestAfc.addr(),
+            self.read_register(Register::TestAfc)?,
+        );
 
         Ok(mapped)
     }
@@ -190,10 +226,10 @@ where
         Ok(())
     }
 
-    pub fn set_tx_power(&mut self, tx_power: i8, is_high_power: bool) -> Result<(), Rfm69Error> {
+    pub fn set_tx_power(&mut self, tx_power: i8) -> Result<(), Rfm69Error> {
         let pa_level;
 
-        if is_high_power {
+        if self.is_high_power {
             let clamped_power = tx_power.clamp(-2, 20);
 
             if clamped_power <= 13 {
@@ -238,8 +274,6 @@ where
                     self.write_register(Register::TestPa1, 0x55)?;
                     self.write_register(Register::TestPa2, 0x70)?;
                 }
-                // set DIOMAPPING1 to 0x01
-                self.write_register(Register::DioMapping1, RF_DIOMAPPING1_DIO0_01)?;
             }
 
             Rfm69Mode::Tx => {
@@ -248,8 +282,6 @@ where
                     self.write_register(Register::TestPa1, 0x5D)?;
                     self.write_register(Register::TestPa2, 0x7C)?;
                 }
-
-                self.write_register(Register::DioMapping1, RF_DIOMAPPING1_DIO0_00)?;
             }
 
             _ => {}
@@ -258,14 +290,66 @@ where
         // Read the current mode
         let mut current_mode = self.read_register(Register::OpMode)?;
         current_mode &= !0x1C;
-        current_mode |= mode as u8 & 0x1C;
+        current_mode |= mode.clone() as u8 & 0x1C;
 
         // // Set the new mode
         self.write_register(Register::OpMode, current_mode)?;
         while (self.read_register(Register::IrqFlags1)? & 0x80) == 0x00 {
             self.delay.delay_ms(10);
         }
+
+        self.current_mode = mode;
         Ok(())
+    }
+
+    fn wait_packet_sent(&mut self) -> Result<(), Rfm69Error> {
+        while (self.read_register(Register::IrqFlags2)? & 0x08) == 0x00 {
+            self.delay.delay_ms(10);
+        }
+        Ok(())
+    }
+
+    pub fn send(&mut self, data: &[u8]) -> Result<(), Rfm69Error> {
+        const HEADER_LENGTH: usize = 5;
+
+        if data.len() > 60 {
+            return Err(Rfm69Error::MessageTooLarge);
+        }
+
+        let mut buffer: [u8; 65] = [0x00; 65];
+        let header = [0xFF, 0xFF, 0x00, 0x00];
+        buffer[0] = (data.len() + 4) as u8;
+        buffer[1..5].copy_from_slice(&header);
+        buffer[5..5 + data.len()].copy_from_slice(data);
+
+        self.write_many(Register::Fifo, &buffer[0..data.len() + HEADER_LENGTH])?;
+
+        self.set_mode(Rfm69Mode::Tx)?;
+        self.wait_packet_sent()?;
+        self.set_mode(Rfm69Mode::Standby)?;
+
+        Ok(())
+    }
+
+    pub fn is_message_available(&mut self) -> Result<bool, Rfm69Error> {
+        if self.current_mode != Rfm69Mode::Rx {
+            return Err(Rfm69Error::InvalidMode);
+        }
+        Ok((self.read_register(Register::IrqFlags2)? & 0x04) == 0x04)
+    }
+
+    pub fn receive(&mut self, buffer: &mut [u8; 65]) -> Result<usize, Rfm69Error> {
+        let message_len = self.read_register(Register::Fifo)?;
+        if buffer.len() < message_len as usize {
+            return Err(Rfm69Error::MessageTooLarge);
+        }
+
+        let mut header = [0u8; 4];
+        self.read_many(Register::Fifo, &mut header).unwrap();
+
+        self.read_many(Register::Fifo, &mut buffer[0..(message_len - 4) as usize])
+            .unwrap();
+        Ok((message_len - 4) as usize)
     }
 
     fn write_register(&mut self, register: Register, value: u8) -> Result<(), Rfm69Error> {
@@ -611,7 +695,7 @@ mod tests {
 
         rfm.spi.update_expectations(&spi_expectations);
 
-        rfm.set_tx_power(-2, true).unwrap();
+        rfm.set_tx_power(-2).unwrap();
         assert_eq!(rfm.tx_power, -2);
 
         check_expectations(&mut rfm);
@@ -631,11 +715,6 @@ mod tests {
             SpiTransaction::transaction_start(),
             SpiTransaction::write(Register::TestPa2.write()),
             SpiTransaction::write(0x70),
-            SpiTransaction::transaction_end(),
-            // set DIOMAPPING1 to 0x01
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write(Register::DioMapping1.write()),
-            SpiTransaction::write(RF_DIOMAPPING1_DIO0_01),
             SpiTransaction::transaction_end(),
             // Read the current value of OpMode
             SpiTransaction::transaction_start(),
@@ -683,11 +762,6 @@ mod tests {
             SpiTransaction::write(Register::TestPa2.write()),
             SpiTransaction::write(0x7C),
             SpiTransaction::transaction_end(),
-            // set DIOMAPPING1 to 0x00
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write(Register::DioMapping1.write()),
-            SpiTransaction::write(RF_DIOMAPPING1_DIO0_00),
-            SpiTransaction::transaction_end(),
             // // Read the current value of OpMode
             SpiTransaction::transaction_start(),
             SpiTransaction::write(Register::OpMode.read()),
@@ -709,14 +783,156 @@ mod tests {
             SpiTransaction::transaction_end(),
         ];
 
-        let delay_expectations = [
-            DelayTransaction::blocking_delay_ms(10)
-        ];
+        let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
 
         rfm.spi.update_expectations(&spi_expectations);
         rfm.delay.update_expectations(&delay_expectations);
 
         rfm.set_mode(Rfm69Mode::Tx).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_send_too_large() {
+        let mut rfm = setup_rfm();
+
+        let message = ['a' as u8; 70];
+
+        assert_eq!(rfm.send(&message), Err(Rfm69Error::MessageTooLarge));
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_send() {
+        let mut rfm = setup_rfm();
+
+        let mut header = vec![17, 0xFF, 0xFF, 0x00, 0x00];
+        let mut message = "Hello, world!".as_bytes().to_vec();
+
+        header.append(&mut message);
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.write()),
+            SpiTransaction::write_vec(header),
+            SpiTransaction::transaction_end(),
+            // // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
+            SpiTransaction::transaction_end(),
+            // // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xCC),
+            SpiTransaction::transaction_end(),
+            // // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x08]),
+            SpiTransaction::transaction_end(),
+
+            // // // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC0]),
+            SpiTransaction::transaction_end(),
+            // // // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xC4),
+            SpiTransaction::transaction_end(),
+            // // // // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
+
+        rfm.spi.update_expectations(&spi_expectations);
+        rfm.delay.update_expectations(&delay_expectations);
+
+        let message = "Hello, world!".as_bytes();
+
+        rfm.send(message).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_receive() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![9]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.read()),
+            SpiTransaction::transfer_in_place(
+                vec![0x00, 0x00, 0x00, 0x00],
+                vec![0x00, 0x00, 0x00, 0x00],
+            ),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.read()),
+            SpiTransaction::transfer_in_place(
+                vec![0x00, 0x00, 0x00, 0x00, 0x00],
+                vec![0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        let mut buffer = [0u8; 65];
+
+        let message_len = rfm.receive(&mut buffer).unwrap();
+        assert_eq!(message_len, 5);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_is_message_available() {
+        let mut rfm = setup_rfm();
+        rfm.current_mode = Rfm69Mode::Rx;
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x04]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&spi_expectations);
+
+        assert_eq!(rfm.is_message_available().unwrap(), true);
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&spi_expectations);
+
+        assert_eq!(rfm.is_message_available().unwrap(), false);
+
+        rfm.current_mode = Rfm69Mode::Tx;
+        assert_eq!(rfm.is_message_available(), Err(Rfm69Error::InvalidMode));
 
         check_expectations(&mut rfm);
     }
