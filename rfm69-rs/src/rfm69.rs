@@ -352,6 +352,11 @@ where
         Ok((message_len - 4) as usize)
     }
 
+    pub fn rssi(&mut self) -> Result<u8, Rfm69Error> {
+        let rssi = self.read_register(Register::RssiValue)?;
+        Ok(rssi / 2)
+    }
+
     fn write_register(&mut self, register: Register, value: u8) -> Result<(), Rfm69Error> {
         self.write_many(register, &[value])?;
         Ok(())
@@ -933,6 +938,24 @@ mod tests {
 
         rfm.current_mode = Rfm69Mode::Tx;
         assert_eq!(rfm.is_message_available(), Err(Rfm69Error::InvalidMode));
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_rssi() {
+        let mut rfm = setup_rfm();
+        rfm.current_mode = Rfm69Mode::Rx;
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::RssiValue.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x50]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&spi_expectations);
+
+        assert_eq!(rfm.rssi().unwrap(), 40);
 
         check_expectations(&mut rfm);
     }
