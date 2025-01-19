@@ -56,11 +56,11 @@ where
         self.reset_pin
             .set_high()
             .map_err(|_| Rfm69Error::ResetError)?;
-        self.delay.delay_ms(10);
+        self.delay.delay_us(100);
         self.reset_pin
             .set_low()
             .map_err(|_| Rfm69Error::ResetError)?;
-        self.delay.delay_ms(10);
+        self.delay.delay_ms(5);
         Ok(())
     }
 
@@ -76,7 +76,10 @@ where
     }
 
     pub fn init(&mut self) -> Result<(), Rfm69Error> {
-        self.reset()?;
+        // self.reset()?;
+        self.delay.delay_ms(10);
+
+        
 
         let version = self.read_register(Register::Version)?;
 
@@ -86,6 +89,8 @@ where
         if version != 0x24 {
             return Err(Rfm69Error::SpiReadError);
         }
+
+        // self.spi.write_many(Register::OpMode, &[0x04]);
 
         self.set_default_fifo_threshold()?;
         self.set_dagc(ContinuousDagc::ImprovedLowBeta1)?;
