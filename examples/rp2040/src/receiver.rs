@@ -84,6 +84,8 @@ async fn main(_spawner: Spawner) {
             
             info!("Message Length: {:?}", message_length);
             let rssi = rfm69.rssi().unwrap();
+            let temperature = rfm69.read_temperature().unwrap();
+            info!("Temperature: {}", temperature);
             info!("RSSI: -{:?}", rssi);
 
             
