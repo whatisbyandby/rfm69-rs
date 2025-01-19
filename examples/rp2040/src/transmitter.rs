@@ -67,6 +67,8 @@ async fn main(_spawner: Spawner) {
         Timer::after(Duration::from_millis(1000)).await;
         rfm69.send("Hello, World!".as_bytes()).unwrap();
         info!("Sent message");
+        let temperature = rfm69.read_temperature().unwrap();
+        info!("Temperature: {}", temperature);
     }
     
 }
