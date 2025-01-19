@@ -80,6 +80,8 @@ where
 
         let version = self.read_register(Register::Version)?;
 
+        info!("RFM69 version: {:?}", version);
+
         // the RFM69 module should return 0x24
         if version != 0x24 {
             return Err(Rfm69Error::SpiReadError);

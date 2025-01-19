@@ -7,6 +7,10 @@ edition = "2021"
 name = "transmitter"
 path = "src/transmitter.rs"
 
+[[bin]]
+name = "receiver"
+path = "src/receiver.rs"
+
 
 
 [dependencies]
