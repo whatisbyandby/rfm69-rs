@@ -76,8 +76,8 @@ where
     }
 
     pub fn init(&mut self) -> Result<(), Rfm69Error> {
-        // self.reset()?;
         self.delay.delay_ms(10);
+        self.reset()?;
 
         
 

@@ -60,9 +60,6 @@ async fn main(_spawner: Spawner) {
         info!("0x{:02X}: 0x{:02X}", register.0, register.1);
     });
 
-    let temperature = rfm69.read_temperature().unwrap();
-    info!("Temperature: {}", temperature);
-
     loop { 
         rfm69.send("Hello, World!".as_bytes()).unwrap();
         info!("Sent message");
