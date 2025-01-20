@@ -434,8 +434,8 @@ mod tests {
         rfm.reset_pin.update_expectations(&reset_expectations);
 
         let delay_expectations = [
-            DelayTransaction::blocking_delay_ms(10),
-            DelayTransaction::blocking_delay_ms(10),
+            DelayTransaction::blocking_delay_us(100),
+            DelayTransaction::blocking_delay_ms(5),
         ];
         rfm.delay.update_expectations(&delay_expectations);
 
