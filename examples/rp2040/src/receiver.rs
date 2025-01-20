@@ -68,7 +68,7 @@ async fn main(_spawner: Spawner) {
 
     loop {
         rfm69.set_mode(rfm69_rs::rfm69::Rfm69Mode::Rx).unwrap();
-        Timer::after(Duration::from_millis(10)).await;
+        Timer::after(Duration::from_millis(1000)).await;
         if rfm69.is_message_available().unwrap() {
             rfm69.set_mode(rfm69_rs::rfm69::Rfm69Mode::Standby).unwrap();
             led.set_high();
@@ -87,18 +87,6 @@ async fn main(_spawner: Spawner) {
             let temperature = rfm69.read_temperature().unwrap();
             info!("Temperature: {}", temperature);
             info!("RSSI: -{:?}", rssi);
-
-            
-
-
-            // give the transmitter some time to switch to RX
-            Timer::after(Duration::from_millis(50)).await;
-
-            // send ack
-            rfm69.send("ACK".as_bytes()).unwrap();
-            info!("Sent ACK");
-            led.set_low();
         }
     }
-    
 }
