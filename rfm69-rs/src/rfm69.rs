@@ -5,7 +5,7 @@ use crate::settings::{
     RF_DIOMAPPING1_DIO0_00, RF_DIOMAPPING1_DIO0_01, RF_PALEVEL_OUTPUTPOWER_11111,
     RF_PALEVEL_PA0_ON, RF_PALEVEL_PA1_ON, RF_PALEVEL_PA2_ON,
 };
-use defmt::*;
+use defmt::{info, debug, Format};
 use embedded_hal::{digital::OutputPin, digital::InputPin};
 use embedded_hal_async::{delay::DelayNs, digital::Wait};
 
@@ -19,7 +19,7 @@ pub struct Rfm69<SPI, RESET, INTR, D> {
     current_mode: Rfm69Mode,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Format)]
 pub enum Rfm69Error {
     ResetError,
     SpiWriteError,
@@ -29,7 +29,7 @@ pub enum Rfm69Error {
     InvalidMode,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Format)]
 pub enum Rfm69Mode {
     Sleep = 0x00,
     Standby = 0x04,
@@ -85,7 +85,7 @@ where
 
         let version = self.read_register(Register::Version)?;
 
-        info!("RFM69 version: {:?}", version);
+        debug!("RFM69 version: {:?}", version);
 
         // the RFM69 module should return 0x24
         if version != 0x24 {
@@ -115,6 +115,8 @@ where
         self.set_tx_power(13)?;
 
         self.set_frequency(915)?;
+        
+        self.set_mode(Rfm69Mode::Standby).await?;
 
         Ok(())
     }
@@ -272,7 +274,9 @@ where
     }
 
     pub async fn set_mode(&mut self, mode: Rfm69Mode) -> Result<(), Rfm69Error> {
+        info!("Setting mode: {:?}", mode);
         if self.current_mode == mode {
+            info!("Already in mode: {:?}", mode);
             return Ok(());
         }
 
@@ -402,578 +406,582 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-
-//     use crate::settings::{ContinuousDagc, SyncConfiguration};
-
-//     use super::*;
-//     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
-//     use embedded_hal_mock::eh1::digital::{
-//         Mock as DigitalMock, State, Transaction as GpioTransaction,
-//     };
-//     use embedded_hal_mock::eh1::spi::{Mock as SpiDevice, Transaction as SpiTransaction};
-
-//     fn setup_rfm() -> Rfm69<SpiDevice<u8>, DigitalMock, CheckedDelay> {
-//         let spi_expectations = [];
-//         let spi_device = SpiDevice::new(spi_expectations);
-
-//         let reset_expectations = [];
-//         let reset_pin = DigitalMock::new(reset_expectations);
-
-//         let delay_expectations = [];
-//         let delay = CheckedDelay::new(delay_expectations);
-
-//         Rfm69::new(spi_device, reset_pin, delay)
-//     }
-
-//     fn check_expectations(rfm: &mut Rfm69<SpiDevice<u8>, DigitalMock, CheckedDelay>) {
-//         rfm.reset_pin.done();
-//         rfm.delay.done();
-//         rfm.spi.done();
-//     }
-
-//     #[test]
-//     fn test_reset() {
-//         let mut rfm = setup_rfm();
-
-//         let reset_expectations = [
-//             GpioTransaction::set(State::High),
-//             GpioTransaction::set(State::Low),
-//         ];
-//         rfm.reset_pin.update_expectations(&reset_expectations);
-
-//         let delay_expectations = [
-//             DelayTransaction::blocking_delay_us(100),
-//             DelayTransaction::blocking_delay_ms(5),
-//         ];
-//         rfm.delay.update_expectations(&delay_expectations);
-
-//         rfm.reset().unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_read_temperature() {
-//         let mut rfm = setup_rfm();
-
-//         let temperature_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Temp1.write()),
-//             SpiTransaction::write(0x08),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Temp1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x04]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Temp1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Temp2.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x8D]),
-//             SpiTransaction::transaction_end(),
-//         ];
-//         rfm.spi.update_expectations(&temperature_expectations);
-
-//         let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
-//         rfm.delay.update_expectations(&delay_expectations);
-
-//         let temperature = rfm.read_temperature().unwrap();
-
-//         assert_eq!(temperature, 25.0);
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_default_fifo_threshold() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::FifoThresh.write()),
-//             SpiTransaction::write(0x8F),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         rfm.set_default_fifo_threshold().unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
+#[cfg(test)]
+mod tests {
+
+    use crate::settings::{ContinuousDagc, SyncConfiguration};
+
+    use super::*;
+    use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
+    use embedded_hal_mock::eh1::digital::{
+        Mock as DigitalMock, State, Transaction as GpioTransaction,
+    };
+    use embedded_hal_mock::eh1::spi::{Mock as SpiDevice, Transaction as SpiTransaction};
+
+    fn setup_rfm() -> Rfm69<SpiDevice<u8>, DigitalMock, DigitalMock, CheckedDelay> {
+        let spi_expectations = [];
+        let spi_device = SpiDevice::new(spi_expectations);
+
+        let reset_expectations = [];
+        let reset_pin = DigitalMock::new(reset_expectations);
+
+        let intr_expectations = [];
+        let intr_pin = DigitalMock::new(intr_expectations);
+
+        let delay_expectations = [];
+        let delay = CheckedDelay::new(delay_expectations);
+
+        Rfm69::new(spi_device, reset_pin, intr_pin, delay)
+    }
+
+    fn check_expectations(rfm: &mut Rfm69<SpiDevice<u8>, DigitalMock, DigitalMock, CheckedDelay>) {
+        rfm.reset_pin.done();
+        rfm.intr_pin.done();
+        rfm.delay.done();
+        rfm.spi.done();
+    }
+
+    #[tokio::test]
+    async fn test_reset() {
+        let mut rfm = setup_rfm();
+
+        let reset_expectations = [
+            GpioTransaction::set(State::High),
+            GpioTransaction::set(State::Low),
+        ];
+        rfm.reset_pin.update_expectations(&reset_expectations);
+
+        let delay_expectations = [
+            DelayTransaction::delay_us(100),
+            DelayTransaction::delay_ms(5),
+        ];
+        rfm.delay.update_expectations(&delay_expectations);
+
+        rfm.reset().await.unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_read_temperature() {
+        let mut rfm = setup_rfm();
+
+        let temperature_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Temp1.write()),
+            SpiTransaction::write(0x08),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Temp1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x04]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Temp1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Temp2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x8D]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&temperature_expectations);
+
+        let delay_expectations = [DelayTransaction::delay_ms(10)];
+        rfm.delay.update_expectations(&delay_expectations);
+
+        let temperature = rfm.read_temperature().await.unwrap();
+
+        assert_eq!(temperature, 25.0);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_default_fifo_threshold() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::FifoThresh.write()),
+            SpiTransaction::write(0x8F),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
 
-//     #[test]
-//     fn test_set_dagc() {
-//         let mut rfm = setup_rfm();
+        rfm.set_default_fifo_threshold().unwrap();
 
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::TestDagc.write()),
-//             SpiTransaction::write(ContinuousDagc::ImprovedLowBeta1 as u8),
-//             SpiTransaction::transaction_end(),
-//         ];
+        check_expectations(&mut rfm);
+    }
 
-//         rfm.spi.update_expectations(&spi_expectations);
+    #[test]
+    fn test_set_dagc() {
+        let mut rfm = setup_rfm();
 
-//         rfm.set_dagc(ContinuousDagc::ImprovedLowBeta1).unwrap();
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestDagc.write()),
+            SpiTransaction::write(ContinuousDagc::ImprovedLowBeta1 as u8),
+            SpiTransaction::transaction_end(),
+        ];
 
-//         check_expectations(&mut rfm);
-//     }
+        rfm.spi.update_expectations(&spi_expectations);
 
-//     #[test]
-//     fn test_set_power() {
-//         let mut rfm = setup_rfm();
+        rfm.set_dagc(ContinuousDagc::ImprovedLowBeta1).unwrap();
 
-//         let spi_expectations = [];
+        check_expectations(&mut rfm);
+    }
 
-//         rfm.spi.update_expectations(&spi_expectations);
+    #[test]
+    fn test_set_power() {
+        let mut rfm = setup_rfm();
 
-//         check_expectations(&mut rfm);
-//     }
+        let spi_expectations = [];
 
-//     #[test]
-//     fn test_set_sync_words() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::SyncConfig.write()),
-//             SpiTransaction::write_vec(vec![184, 1, 2, 3, 4, 5, 6, 7, 8]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         let sync_words = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
-//         rfm.set_sync_words(
-//             SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
-//             &sync_words,
-//         )
-//         .unwrap();
+        rfm.spi.update_expectations(&spi_expectations);
 
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_sync_words_clamp() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::SyncConfig.write()),
-//             SpiTransaction::write_vec(vec![191, 1, 2, 3, 4, 5, 6, 7, 8]),
-//             SpiTransaction::transaction_end(),
-//         ];
+        check_expectations(&mut rfm);
+    }
 
-//         rfm.spi.update_expectations(&spi_expectations);
+    #[test]
+    fn test_set_sync_words() {
+        let mut rfm = setup_rfm();
 
-//         let sync_words = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::SyncConfig.write()),
+            SpiTransaction::write_vec(vec![184, 1, 2, 3, 4, 5, 6, 7, 8]),
+            SpiTransaction::transaction_end(),
+        ];
 
-//         // sync_tolerance is clamped to 7
-//         rfm.set_sync_words(
-//             SyncConfiguration::FifoFillAuto { sync_tolerance: 14 },
-//             &sync_words,
-//         )
-//         .unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
+        rfm.spi.update_expectations(&spi_expectations);
 
-//     #[test]
-//     fn test_set_sync_words_too_long() {
-//         let mut rfm = setup_rfm();
+        let sync_words = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        rfm.set_sync_words(
+            SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
+            &sync_words,
+        )
+        .unwrap();
 
-//         let spi_expectations = [];
+        check_expectations(&mut rfm);
+    }
 
-//         rfm.spi.update_expectations(&spi_expectations);
+    #[test]
+    fn test_set_sync_words_clamp() {
+        let mut rfm = setup_rfm();
 
-//         let sync_words = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09];
-//         assert_eq!(
-//             rfm.set_sync_words(
-//                 SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
-//                 &sync_words
-//             ),
-//             Err(Rfm69Error::ConfigurationError)
-//         );
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::SyncConfig.write()),
+            SpiTransaction::write_vec(vec![191, 1, 2, 3, 4, 5, 6, 7, 8]),
+            SpiTransaction::transaction_end(),
+        ];
 
-//         check_expectations(&mut rfm);
-//     }
+        rfm.spi.update_expectations(&spi_expectations);
 
-//     #[test]
-//     fn test_set_sync_words_empty() {
-//         let mut rfm = setup_rfm();
+        let sync_words = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
 
-//         let spi_expectations = [];
+        // sync_tolerance is clamped to 7
+        rfm.set_sync_words(
+            SyncConfiguration::FifoFillAuto { sync_tolerance: 14 },
+            &sync_words,
+        )
+        .unwrap();
 
-//         rfm.spi.update_expectations(&spi_expectations);
+        check_expectations(&mut rfm);
+    }
 
-//         let sync_words = [];
-//         assert_eq!(
-//             rfm.set_sync_words(
-//                 SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
-//                 &sync_words
-//             ),
-//             Err(Rfm69Error::ConfigurationError)
-//         );
+    #[test]
+    fn test_set_sync_words_too_long() {
+        let mut rfm = setup_rfm();
 
-//         check_expectations(&mut rfm);
-//     }
+        let spi_expectations = [];
 
-//     #[test]
-//     fn test_set_modem_config() {
-//         let mut rfm = setup_rfm();
+        rfm.spi.update_expectations(&spi_expectations);
 
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::DataModul.write()),
-//             SpiTransaction::write_vec(vec![0x00, 0x3e, 0x80, 0x00, 0x52]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::RxBw.write()),
-//             SpiTransaction::write_vec(vec![0xf4, 0xf4]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::PacketConfig1.write()),
-//             SpiTransaction::write(0xd0),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         rfm.set_modem_config(ModemConfigChoice::FskRb2Fd5).unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_preamble_length() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::PreambleMsb.write()),
-//             SpiTransaction::write_vec(vec![0x00, 0xFF]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         rfm.set_preamble_length(255).unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_get_revision() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Version.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x24]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         let revision = rfm.read_revision().unwrap();
-//         assert_eq!(revision, 0x24);
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_frequency() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::FrfMsb.write()),
-//             SpiTransaction::write_vec(vec![0xE4, 0xC0, 0x00]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         rfm.set_frequency(915).unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_tx_power() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::PaLevel.write()),
-//             SpiTransaction::write(0x50),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         rfm.set_tx_power(-2).unwrap();
-//         assert_eq!(rfm.tx_power, -2);
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_mode_rx() {
-//         let mut rfm = setup_rfm();
-//         rfm.tx_power = 18;
-
-//         let spi_expectations = [
-//             // If high power boost, return power amp to receive mode
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::TestPa1.write()),
-//             SpiTransaction::write(0x55),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::TestPa2.write()),
-//             SpiTransaction::write(0x70),
-//             SpiTransaction::transaction_end(),
-//             // Read the current value of OpMode
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
-//             SpiTransaction::transaction_end(),
-//             // Set the new mode, leaving the other bits unchanged
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.write()),
-//             SpiTransaction::write(0xD0),
-//             SpiTransaction::transaction_end(),
-//             // Wait for the mode to change
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-//         rfm.delay.update_expectations(&delay_expectations);
-
-//         rfm.set_mode(Rfm69Mode::Rx).unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_set_mode_tx() {
-//         let mut rfm = setup_rfm();
-//         rfm.tx_power = 18;
-
-//         let spi_expectations = [
-//             // If high power boost, return power amp to receive mode
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::TestPa1.write()),
-//             SpiTransaction::write(0x5D),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::TestPa2.write()),
-//             SpiTransaction::write(0x7C),
-//             SpiTransaction::transaction_end(),
-//             // // Read the current value of OpMode
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
-//             SpiTransaction::transaction_end(),
-//             // // Set the new mode, leaving the other bits unchanged
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.write()),
-//             SpiTransaction::write(0xCC),
-//             SpiTransaction::transaction_end(),
-//             // // Wait for the mode to change
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-//         rfm.delay.update_expectations(&delay_expectations);
-
-//         rfm.set_mode(Rfm69Mode::Tx).unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_send_too_large() {
-//         let mut rfm = setup_rfm();
-
-//         let message = ['a' as u8; 70];
-
-//         assert_eq!(rfm.send(&message), Err(Rfm69Error::MessageTooLarge));
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_send() {
-//         let mut rfm = setup_rfm();
-
-//         let mut header = vec![17, 0xFF, 0xFF, 0x00, 0x00];
-//         let mut message = "Hello, world!".as_bytes().to_vec();
-
-//         header.append(&mut message);
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Fifo.write()),
-//             SpiTransaction::write_vec(header),
-//             SpiTransaction::transaction_end(),
-//             // // Read the current value of OpMode
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
-//             SpiTransaction::transaction_end(),
-//             // // Set the new mode, leaving the other bits unchanged
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.write()),
-//             SpiTransaction::write(0xCC),
-//             SpiTransaction::transaction_end(),
-//             // // Wait for the mode to change
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags2.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x08]),
-//             SpiTransaction::transaction_end(),
-
-//             // // // Read the current value of OpMode
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0xC0]),
-//             SpiTransaction::transaction_end(),
-//             // // // Set the new mode, leaving the other bits unchanged
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::OpMode.write()),
-//             SpiTransaction::write(0xC4),
-//             SpiTransaction::transaction_end(),
-//             // // // // Wait for the mode to change
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags1.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         let delay_expectations = [DelayTransaction::blocking_delay_ms(10)];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-//         rfm.delay.update_expectations(&delay_expectations);
-
-//         let message = "Hello, world!".as_bytes();
-
-//         rfm.send(message).unwrap();
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_receive() {
-//         let mut rfm = setup_rfm();
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Fifo.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![9]),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Fifo.read()),
-//             SpiTransaction::transfer_in_place(
-//                 vec![0x00, 0x00, 0x00, 0x00],
-//                 vec![0x00, 0x00, 0x00, 0x00],
-//             ),
-//             SpiTransaction::transaction_end(),
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::Fifo.read()),
-//             SpiTransaction::transfer_in_place(
-//                 vec![0x00, 0x00, 0x00, 0x00, 0x00],
-//                 vec![0x00, 0x00, 0x00, 0x00, 0x00],
-//             ),
-//             SpiTransaction::transaction_end(),
-//         ];
-
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         let mut buffer = [0u8; 65];
-
-//         let message_len = rfm.receive(&mut buffer).unwrap();
-//         assert_eq!(message_len, 5);
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_is_message_available() {
-//         let mut rfm = setup_rfm();
-//         rfm.current_mode = Rfm69Mode::Rx;
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags2.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x04]),
-//             SpiTransaction::transaction_end(),
-//         ];
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         assert_eq!(rfm.is_message_available().unwrap(), true);
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::IrqFlags2.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
-//             SpiTransaction::transaction_end(),
-//         ];
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         assert_eq!(rfm.is_message_available().unwrap(), false);
-
-//         rfm.current_mode = Rfm69Mode::Tx;
-//         assert_eq!(rfm.is_message_available(), Err(Rfm69Error::InvalidMode));
-
-//         check_expectations(&mut rfm);
-//     }
-
-//     #[test]
-//     fn test_rssi() {
-//         let mut rfm = setup_rfm();
-//         rfm.current_mode = Rfm69Mode::Rx;
-
-//         let spi_expectations = [
-//             SpiTransaction::transaction_start(),
-//             SpiTransaction::write(Register::RssiValue.read()),
-//             SpiTransaction::transfer_in_place(vec![0x00], vec![0x50]),
-//             SpiTransaction::transaction_end(),
-//         ];
-//         rfm.spi.update_expectations(&spi_expectations);
-
-//         assert_eq!(rfm.rssi().unwrap(), 40);
-
-//         check_expectations(&mut rfm);
-//     }
-// }
+        let sync_words = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09];
+        assert_eq!(
+            rfm.set_sync_words(
+                SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
+                &sync_words
+            ),
+            Err(Rfm69Error::ConfigurationError)
+        );
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_sync_words_empty() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        let sync_words = [];
+        assert_eq!(
+            rfm.set_sync_words(
+                SyncConfiguration::FifoFillAuto { sync_tolerance: 0 },
+                &sync_words
+            ),
+            Err(Rfm69Error::ConfigurationError)
+        );
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_modem_config() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::DataModul.write()),
+            SpiTransaction::write_vec(vec![0x00, 0x3e, 0x80, 0x00, 0x52]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::RxBw.write()),
+            SpiTransaction::write_vec(vec![0xf4, 0xf4]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::PacketConfig1.write()),
+            SpiTransaction::write(0xd0),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_modem_config(ModemConfigChoice::FskRb2Fd5).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_preamble_length() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::PreambleMsb.write()),
+            SpiTransaction::write_vec(vec![0x00, 0xFF]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_preamble_length(255).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_get_revision() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Version.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x24]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        let revision = rfm.read_revision().unwrap();
+        assert_eq!(revision, 0x24);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_frequency() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::FrfMsb.write()),
+            SpiTransaction::write_vec(vec![0xE4, 0xC0, 0x00]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_frequency(915).unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_set_tx_power() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::PaLevel.write()),
+            SpiTransaction::write(0x50),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        rfm.set_tx_power(-2).unwrap();
+        assert_eq!(rfm.tx_power, -2);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_set_mode_rx() {
+        let mut rfm = setup_rfm();
+        rfm.tx_power = 18;
+
+        let spi_expectations = [
+            // If high power boost, return power amp to receive mode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa1.write()),
+            SpiTransaction::write(0x55),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa2.write()),
+            SpiTransaction::write(0x70),
+            SpiTransaction::transaction_end(),
+            // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
+            SpiTransaction::transaction_end(),
+            // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xD0),
+            SpiTransaction::transaction_end(),
+            // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        let delay_expectations = [DelayTransaction::delay_ms(10)];
+
+        rfm.spi.update_expectations(&spi_expectations);
+        rfm.delay.update_expectations(&delay_expectations);
+
+        rfm.set_mode(Rfm69Mode::Rx).await.unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_set_mode_tx() {
+        let mut rfm = setup_rfm();
+        rfm.tx_power = 18;
+
+        let spi_expectations = [
+            // If high power boost, return power amp to receive mode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa1.write()),
+            SpiTransaction::write(0x5D),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::TestPa2.write()),
+            SpiTransaction::write(0x7C),
+            SpiTransaction::transaction_end(),
+            // // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
+            SpiTransaction::transaction_end(),
+            // // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xCC),
+            SpiTransaction::transaction_end(),
+            // // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        let delay_expectations = [DelayTransaction::delay_ms(10)];
+
+        rfm.spi.update_expectations(&spi_expectations);
+        rfm.delay.update_expectations(&delay_expectations);
+
+        rfm.set_mode(Rfm69Mode::Tx).await.unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_send_too_large() {
+        let mut rfm = setup_rfm();
+
+        let message = ['a' as u8; 70];
+
+        assert_eq!(rfm.send(&message).await, Err(Rfm69Error::MessageTooLarge));
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_send() {
+        let mut rfm = setup_rfm();
+
+        let mut header = vec![17, 0xFF, 0xFF, 0x00, 0x00];
+        let mut message = "Hello, world!".as_bytes().to_vec();
+
+        header.append(&mut message);
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.write()),
+            SpiTransaction::write_vec(header),
+            SpiTransaction::transaction_end(),
+            // // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC4]),
+            SpiTransaction::transaction_end(),
+            // // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xCC),
+            SpiTransaction::transaction_end(),
+            // // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x08]),
+            SpiTransaction::transaction_end(),
+
+            // // // Read the current value of OpMode
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0xC0]),
+            SpiTransaction::transaction_end(),
+            // // // Set the new mode, leaving the other bits unchanged
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::OpMode.write()),
+            SpiTransaction::write(0xC4),
+            SpiTransaction::transaction_end(),
+            // // // // Wait for the mode to change
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags1.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x80]),
+            SpiTransaction::transaction_end(),
+        ];
+
+        let delay_expectations = [DelayTransaction::delay_ms(10)];
+
+        rfm.spi.update_expectations(&spi_expectations);
+        rfm.delay.update_expectations(&delay_expectations);
+
+        let message = "Hello, world!".as_bytes();
+
+        rfm.send(message).await.unwrap();
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_receive() {
+        let mut rfm = setup_rfm();
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![9]),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.read()),
+            SpiTransaction::transfer_in_place(
+                vec![0x00, 0x00, 0x00, 0x00],
+                vec![0x00, 0x00, 0x00, 0x00],
+            ),
+            SpiTransaction::transaction_end(),
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::Fifo.read()),
+            SpiTransaction::transfer_in_place(
+                vec![0x00, 0x00, 0x00, 0x00, 0x00],
+                vec![0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+            SpiTransaction::transaction_end(),
+        ];
+
+        rfm.spi.update_expectations(&spi_expectations);
+
+        let mut buffer = [0u8; 65];
+
+        let message_len = rfm.receive(&mut buffer).await.unwrap();
+        assert_eq!(message_len, 5);
+
+        check_expectations(&mut rfm);
+    }
+
+    #[tokio::test]
+    async fn test_is_message_available() {
+        let mut rfm = setup_rfm();
+        rfm.current_mode = Rfm69Mode::Rx;
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x04]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&spi_expectations);
+
+        assert_eq!(rfm.is_message_available().unwrap(), true);
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::IrqFlags2.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x00]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&spi_expectations);
+
+        assert_eq!(rfm.is_message_available().unwrap(), false);
+
+        rfm.current_mode = Rfm69Mode::Tx;
+        assert_eq!(rfm.is_message_available(), Err(Rfm69Error::InvalidMode));
+
+        check_expectations(&mut rfm);
+    }
+
+    #[test]
+    fn test_rssi() {
+        let mut rfm = setup_rfm();
+        rfm.current_mode = Rfm69Mode::Rx;
+
+        let spi_expectations = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write(Register::RssiValue.read()),
+            SpiTransaction::transfer_in_place(vec![0x00], vec![0x50]),
+            SpiTransaction::transaction_end(),
+        ];
+        rfm.spi.update_expectations(&spi_expectations);
+
+        assert_eq!(rfm.rssi().unwrap(), 40);
+
+        check_expectations(&mut rfm);
+    }
+}
