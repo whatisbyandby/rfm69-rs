@@ -5,8 +5,8 @@ use crate::settings::{
     RF_DIOMAPPING1_DIO0_00, RF_DIOMAPPING1_DIO0_01, RF_PALEVEL_OUTPUTPOWER_11111,
     RF_PALEVEL_PA0_ON, RF_PALEVEL_PA1_ON, RF_PALEVEL_PA2_ON,
 };
-use defmt::{info, debug, Format};
-use embedded_hal::{digital::OutputPin, digital::InputPin};
+use defmt::{debug, info, Format};
+use embedded_hal::{digital::InputPin, digital::OutputPin};
 use embedded_hal_async::{delay::DelayNs, digital::Wait};
 
 pub struct Rfm69<SPI, RESET, INTR, D> {
@@ -115,7 +115,7 @@ where
         self.set_tx_power(13)?;
 
         self.set_frequency(915)?;
-        
+
         self.set_mode(Rfm69Mode::Standby).await?;
 
         Ok(())
@@ -274,9 +274,7 @@ where
     }
 
     pub async fn set_mode(&mut self, mode: Rfm69Mode) -> Result<(), Rfm69Error> {
-        info!("Setting mode: {:?}", mode);
         if self.current_mode == mode {
-            info!("Already in mode: {:?}", mode);
             return Ok(());
         }
 
@@ -295,6 +293,9 @@ where
                     self.write_register(Register::TestPa1, 0x5D)?;
                     self.write_register(Register::TestPa2, 0x7C)?;
                 }
+
+                // enable the packet sent interrupt
+                self.write_register(Register::DioMapping1, RF_DIOMAPPING1_DIO0_00)?;
             }
 
             _ => {}
@@ -316,7 +317,9 @@ where
     }
 
     async fn wait_packet_sent(&mut self) -> Result<(), Rfm69Error> {
-        while (self.read_register(Register::IrqFlags2)? & 0x08) == 0x00 {
+        self.intr_pin.wait_for_high().await.unwrap();
+        while (self.read_register(Register::IrqFlags2)? & 0x08) == 0 {
+            info!("Waiting for packet sent...");
             self.delay.delay_ms(10).await;
         }
         Ok(())
@@ -357,7 +360,6 @@ where
         }
         Ok(())
     }
-
 
     pub async fn receive(&mut self, buffer: &mut [u8; 65]) -> Result<usize, Rfm69Error> {
         let message_len = self.read_register(Register::Fifo)?;
@@ -871,7 +873,6 @@ mod tests {
             SpiTransaction::write(Register::IrqFlags2.read()),
             SpiTransaction::transfer_in_place(vec![0x00], vec![0x08]),
             SpiTransaction::transaction_end(),
-
             // // // Read the current value of OpMode
             SpiTransaction::transaction_start(),
             SpiTransaction::write(Register::OpMode.read()),
